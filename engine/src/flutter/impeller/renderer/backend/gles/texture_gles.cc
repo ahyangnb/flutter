@@ -502,7 +502,9 @@ void TextureGLES::InitializeContentsIfNecessary() {
   }
 
   if (UsesImmutableStorage()) {
-    EnsureImmutableStorage();
+    if (!EnsureImmutableStorage()) {
+      return;
+    }
     return;
   }
 
