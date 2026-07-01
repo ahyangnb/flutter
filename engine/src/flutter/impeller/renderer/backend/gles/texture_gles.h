@@ -90,6 +90,10 @@ class TextureGLES final : public Texture,
 
   [[nodiscard]] bool GenerateMipmap();
 
+  [[nodiscard]] bool UsesImmutableStorage() const;
+
+  [[nodiscard]] bool EnsureImmutableStorage();
+
   enum class AttachmentType {
     kColor0,
     kDepth,

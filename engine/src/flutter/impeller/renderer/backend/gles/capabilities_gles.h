@@ -81,8 +81,9 @@ class CapabilitiesGLES final
   bool IsES() const;
 
   // |Capabilities|
-  /// Always false. Rendering into a non-zero mip level is not yet implemented
-  /// on the GLES backend; see SupportsFramebufferRenderMipmap in the .cc file.
+  /// Whether GLES supports attaching non-zero texture mip levels as framebuffer
+  /// render targets and has immutable storage available to make those levels
+  /// framebuffer-complete.
   bool SupportsFramebufferRenderMipmap() const override;
 
   /// @brief Whether GL_TEXTURE_MAX_LEVEL can be set to bound a texture's
@@ -168,6 +169,7 @@ class CapabilitiesGLES final
   bool supports_decal_sampler_address_mode_ = false;
   bool supports_offscreen_msaa_ = false;
   bool supports_implicit_msaa_ = false;
+  bool supports_framebuffer_render_mipmap_ = false;
   bool supports_32bit_primitive_indices_ = false;
   bool supports_texture_max_level_ = false;
   bool is_angle_ = false;

@@ -1620,17 +1620,14 @@ TEST_P(RendererTest, CanRenderToTextureSlice) {
   EXPECT_TRUE(context->GetCommandQueue()->Submit({buffer}).ok());
 }
 
-// Clears mip level 1 of a texture by attaching it as a render target. Skipped
-// on OpenGL ES, where rendering to non-zero mip levels needs ES 3.0 or
-// GL_OES_fbo_render_mipmap.
+// Clears mip level 1 of a texture by attaching it as a render target.
 TEST_P(RendererTest, CanRenderToMipLevel) {
-  if (GetBackend() == PlaygroundBackend::kOpenGLES ||
-      GetBackend() == PlaygroundBackend::kOpenGLESSDF) {
-    GTEST_SKIP() << "Rendering to non-zero mip levels is gated on a GLES "
-                    "capability; covered by the Metal and Vulkan backends.";
-  }
   auto context = GetContext();
   ASSERT_TRUE(context);
+  if (!context->GetCapabilities()->SupportsFramebufferRenderMipmap()) {
+    GTEST_SKIP() << "Rendering to non-zero mip levels is not supported on "
+                    "this backend.";
+  }
 
   TextureDescriptor desc;
   desc.storage_mode = StorageMode::kDevicePrivate;

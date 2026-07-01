@@ -272,13 +272,14 @@ std::shared_ptr<TextureGLES> CreateMipTexture(
     PixelFormat format,
     ISize size,
     size_t mip_count,
-    TextureType type = TextureType::kTexture2D) {
+    TextureType type = TextureType::kTexture2D,
+    TextureUsageMask usage = TextureUsage::kShaderRead) {
   TextureDescriptor tex_desc;
   tex_desc.format = format;
   tex_desc.size = size;
   tex_desc.mip_count = mip_count;
   tex_desc.type = type;
-  tex_desc.usage = static_cast<TextureUsageMask>(TextureUsage::kRenderTarget);
+  tex_desc.usage = usage;
   auto texture = std::make_shared<TextureGLES>(reactor, tex_desc);
   return texture;
 }
@@ -333,6 +334,42 @@ TEST(BlitCommandGLESTest,
       .Times(0);
   EXPECT_CALL(mock_gles_impl_ref,
               TexSubImage2D(GL_TEXTURE_2D, 0, _, _, 8, 8, _, _, _))
+      .Times(1);
+
+  EXPECT_TRUE(command.Encode(*reactor));
+}
+
+TEST(BlitCommandGLESTest,
+     BlitCopyBufferToMippedRenderTargetUsesImmutableStorage) {
+  auto mock_gles_impl = std::make_unique<MockGLESImpl>();
+  auto& mock_gles_impl_ref = *mock_gles_impl;
+  std::shared_ptr<MockGLES> mock_gl = MockGLES::Init(std::move(mock_gles_impl));
+  auto reactor = std::make_shared<TestReactorGLES>();
+  auto worker = std::make_shared<MockWorker>();
+  reactor->AddWorker(worker);
+
+  auto dest = CreateMipTexture(
+      reactor, PixelFormat::kR8G8B8A8UNormInt, ISize{8, 8},
+      /*mip_count=*/3, TextureType::kTexture2D,
+      TextureUsage::kRenderTarget | TextureUsage::kShaderRead);
+  auto source = CreateMipBuffer(reactor, 4 * 4 * 4);
+
+  BlitCopyBufferToTextureCommandGLES command;
+  command.source = DeviceBuffer::AsBufferView(source);
+  command.destination = dest;
+  command.destination_region = IRect::MakeXYWH(0, 0, 4, 4);
+  command.mip_level = 1;
+  command.slice = 0;
+  command.label = "TestBlit";
+
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexStorage2D(GL_TEXTURE_2D, 3, GL_RGBA8, 8, 8))
+      .Times(1);
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexImage2D(GL_TEXTURE_2D, _, _, _, _, _, _, _, nullptr))
+      .Times(0);
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexSubImage2D(GL_TEXTURE_2D, 1, _, _, 4, 4, _, _, _))
       .Times(1);
 
   EXPECT_TRUE(command.Encode(*reactor));

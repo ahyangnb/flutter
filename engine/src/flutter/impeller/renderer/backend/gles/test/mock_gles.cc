@@ -297,6 +297,17 @@ void mockTexImage2D(GLenum target,
 static_assert(CheckSameSignature<decltype(mockTexImage2D),  //
                                  decltype(glTexImage2D)>::value);
 
+void mockTexStorage2DEXT(GLenum target,
+                         GLsizei levels,
+                         GLenum internalformat,
+                         GLsizei width,
+                         GLsizei height) {
+  CallMockMethod(&IMockGLESImpl::TexStorage2D, target, levels, internalformat,
+                 width, height);
+}
+static_assert(CheckSameSignature<decltype(mockTexStorage2DEXT),  //
+                                 decltype(glTexStorage2DEXT)>::value);
+
 void mockBindTexture(GLenum target, GLuint texture) {
   CallMockMethod(&IMockGLESImpl::BindTexture, target, texture);
 }
@@ -503,6 +514,8 @@ const ProcTableGLES::Resolver kMockResolverGLES = [](const char* name) {
     return reinterpret_cast<void*>(mockTexSubImage2D);
   } else if (strcmp(name, "glTexImage2D") == 0) {
     return reinterpret_cast<void*>(mockTexImage2D);
+  } else if (strcmp(name, "glTexStorage2DEXT") == 0) {
+    return reinterpret_cast<void*>(mockTexStorage2DEXT);
   } else if (strcmp(name, "glBindTexture") == 0) {
     return reinterpret_cast<void*>(mockBindTexture);
   } else if (strcmp(name, "glObjectLabelKHR") == 0) {

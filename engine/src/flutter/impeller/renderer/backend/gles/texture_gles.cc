@@ -62,6 +62,52 @@ static bool IsDepthStencilFormat(PixelFormat format) {
   FML_UNREACHABLE();
 }
 
+static std::optional<GLenum> ToImmutableTextureStorageFormat(
+    PixelFormat format) {
+  switch (format) {
+    case PixelFormat::kB8G8R8A8UNormInt:
+    case PixelFormat::kR8G8B8A8UNormInt:
+      return GL_RGBA8;
+    case PixelFormat::kR32G32B32A32Float:
+      return GL_RGBA32F;
+    case PixelFormat::kR16G16B16A16Float:
+      return GL_RGBA16F;
+    case PixelFormat::kD24UnormS8Uint:
+      return GL_DEPTH24_STENCIL8;
+    case PixelFormat::kUnknown:
+    case PixelFormat::kA8UNormInt:
+    case PixelFormat::kS8UInt:
+    case PixelFormat::kR8UNormInt:
+    case PixelFormat::kR8G8UNormInt:
+    case PixelFormat::kR8G8B8A8UNormIntSRGB:
+    case PixelFormat::kB8G8R8A8UNormIntSRGB:
+    case PixelFormat::kD32FloatS8UInt:
+    case PixelFormat::kB10G10R10XRSRGB:
+    case PixelFormat::kB10G10R10XR:
+    case PixelFormat::kB10G10R10A10XR:
+    case PixelFormat::kR32Float:
+    case PixelFormat::kBC1RGBAUNormInt:
+    case PixelFormat::kBC1RGBAUNormIntSRGB:
+    case PixelFormat::kBC3RGBAUNormInt:
+    case PixelFormat::kBC3RGBAUNormIntSRGB:
+    case PixelFormat::kBC5RGUNormInt:
+    case PixelFormat::kBC7RGBAUNormInt:
+    case PixelFormat::kBC7RGBAUNormIntSRGB:
+    case PixelFormat::kETC2RGB8UNormInt:
+    case PixelFormat::kETC2RGB8UNormIntSRGB:
+    case PixelFormat::kETC2RGBA8UNormInt:
+    case PixelFormat::kETC2RGBA8UNormIntSRGB:
+    case PixelFormat::kASTC4x4LDR:
+    case PixelFormat::kASTC4x4LDRSRGB:
+    case PixelFormat::kASTC8x8LDR:
+    case PixelFormat::kASTC8x8LDRSRGB:
+    case PixelFormat::kASTC4x4HDR:
+    case PixelFormat::kASTC8x8HDR:
+      return std::nullopt;
+  }
+  FML_UNREACHABLE();
+}
+
 static TextureGLES::Type GetTextureTypeFromDescriptor(
     const TextureDescriptor& desc,
     const std::shared_ptr<const CapabilitiesGLES>& capabilities) {
@@ -277,11 +323,27 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
     return false;
   }
 
+  const bool use_immutable_storage = UsesImmutableStorage();
+  const bool allocate_immutable_storage =
+      use_immutable_storage && !IsSliceMipLevelInitialized(0, 0);
+  auto immutable_storage_format =
+      allocate_immutable_storage
+          ? ToImmutableTextureStorageFormat(tex_descriptor.format)
+          : std::optional<GLenum>();
+  if (allocate_immutable_storage && !immutable_storage_format.has_value()) {
+    VALIDATION_LOG << "Invalid format for immutable texture storage.";
+    return false;
+  }
+
   ReactorGLES::Operation texture_upload =
       [handle = handle_.Get(),                                   //
        mapping,                                                  //
        format = gles_format.value(),                             //
+       use_immutable_storage,                                     //
+       allocate_immutable_storage,                                //
+       immutable_storage_format,                                  //
        size = tex_descriptor.size,                               //
+       mip_count = tex_descriptor.mip_count,                      //
        image_size = tex_descriptor.GetByteSizeOfBaseMipLevel(),  //
        texture_type,                                             //
        texture_target                                            //
@@ -303,7 +365,30 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
           TRACE_EVENT1("impeller", "TexImage2DUpload", "Bytes",
                        std::to_string(mapping->GetSize()).c_str());
           gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-          if (format.is_compressed) {
+          if (use_immutable_storage) {
+            if (allocate_immutable_storage) {
+              if (!gl.TexStorage2DEXT.IsAvailable()) {
+                VALIDATION_LOG << "glTexStorage2D is not available.";
+                return;
+              }
+              gl.TexStorage2DEXT(
+                  texture_type,                           // target
+                  static_cast<GLsizei>(mip_count),        // levels
+                  immutable_storage_format.value(),       // internal format
+                  static_cast<GLsizei>(size.width),       // width
+                  static_cast<GLsizei>(size.height)       // height
+              );
+            }
+            gl.TexSubImage2D(texture_target,          // target
+                             0u,                      // LOD level
+                             0u,                      // xoffset
+                             0u,                      // yoffset
+                             size.width,              // width
+                             size.height,             // height
+                             format.external_format,  // format
+                             format.type,             // type
+                             tex_data);               // data
+          } else if (format.is_compressed) {
             gl.CompressedTexImage2D(texture_target,          // target
                                     0u,                      // LOD level
                                     format.internal_format,  // internal format
@@ -328,7 +413,11 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
 
   const bool added = reactor_->AddOperation(texture_upload);
   if (added) {
-    MarkSliceMipLevelInitialized(slice, 0);
+    if (use_immutable_storage) {
+      MarkContentsInitialized();
+    } else {
+      MarkSliceMipLevelInitialized(slice, 0);
+    }
   }
   return added;
 }
@@ -409,6 +498,11 @@ void TextureGLES::InitializeContentsIfNecessary() {
 
   if (size.IsEmpty()) {
     MarkContentsInitialized();
+    return;
+  }
+
+  if (UsesImmutableStorage()) {
+    EnsureImmutableStorage();
     return;
   }
 
@@ -632,6 +726,67 @@ TextureGLES::Type TextureGLES::GetType() const {
   return type_;
 }
 
+bool TextureGLES::UsesImmutableStorage() const {
+  const auto& desc = GetTextureDescriptor();
+  const auto& capabilities = reactor_->GetProcTable().GetCapabilities();
+  if (is_wrapped_ || type_ != Type::kTexture || desc.mip_count <= 1u ||
+      !(desc.usage & TextureUsage::kRenderTarget) ||
+      !capabilities->SupportsFramebufferRenderMipmap()) {
+    return false;
+  }
+
+  switch (desc.type) {
+    case TextureType::kTexture2D:
+    case TextureType::kTextureCube:
+      return true;
+    case TextureType::kTexture2DMultisample:
+    case TextureType::kTextureExternalOES:
+      return false;
+  }
+  FML_UNREACHABLE();
+}
+
+bool TextureGLES::EnsureImmutableStorage() {
+  if (!UsesImmutableStorage() || IsSliceMipLevelInitialized(0, 0)) {
+    return true;
+  }
+
+  const auto& desc = GetTextureDescriptor();
+  auto storage_format = ToImmutableTextureStorageFormat(desc.format);
+  if (!storage_format.has_value()) {
+    VALIDATION_LOG << "Invalid format for immutable texture storage.";
+    return false;
+  }
+
+  auto texture_target = ToTextureTarget(desc.type);
+  if (!texture_target.has_value()) {
+    VALIDATION_LOG << "Could not bind texture of this type.";
+    return false;
+  }
+
+  auto handle = GetGLHandle();
+  if (!handle.has_value()) {
+    return false;
+  }
+
+  const auto& gl = reactor_->GetProcTable();
+  if (!gl.TexStorage2DEXT.IsAvailable()) {
+    VALIDATION_LOG << "glTexStorage2D is not available.";
+    return false;
+  }
+
+  const auto size = GetSize();
+  gl.BindTexture(texture_target.value(), handle.value());
+  gl.TexStorage2DEXT(texture_target.value(),                 // target
+                     static_cast<GLsizei>(desc.mip_count),   // levels
+                     storage_format.value(),                 // internal format
+                     static_cast<GLsizei>(size.width),       // width
+                     static_cast<GLsizei>(size.height)       // height
+  );
+  MarkContentsInitialized();
+  return true;
+}
+
 static GLenum ToAttachmentType(TextureGLES::AttachmentType point) {
   switch (point) {
     case TextureGLES::AttachmentType::kColor0:
@@ -646,6 +801,10 @@ static GLenum ToAttachmentType(TextureGLES::AttachmentType point) {
 bool TextureGLES::EnsureSliceMipLevelStorage(size_t slice, size_t mip_level) {
   if (IsSliceMipLevelInitialized(slice, mip_level)) {
     return true;
+  }
+  if (UsesImmutableStorage()) {
+    return EnsureImmutableStorage() &&
+           IsSliceMipLevelInitialized(slice, mip_level);
   }
   // Renderbuffers and multisampled textures only have their single level
   // allocated at init; only sampled 2D and cube textures allocate per-level.

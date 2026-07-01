@@ -36,6 +36,11 @@ class IMockGLESImpl {
                           GLenum format,
                           GLenum type,
                           const void* pixels) {}
+  virtual void TexStorage2D(GLenum target,
+                            GLsizei levels,
+                            GLenum internalformat,
+                            GLsizei width,
+                            GLsizei height) {}
   virtual void TexSubImage2D(GLenum target,
                              GLint level,
                              GLint xoffset,
@@ -158,6 +163,14 @@ class MockGLESImpl : public IMockGLESImpl {
                GLenum format,
                GLenum type,
                const void* pixels),
+              (override));
+  MOCK_METHOD(void,
+              TexStorage2D,
+              (GLenum target,
+               GLsizei levels,
+               GLenum internalformat,
+               GLsizei width,
+               GLsizei height),
               (override));
   MOCK_METHOD(void,
               GenFramebuffers,

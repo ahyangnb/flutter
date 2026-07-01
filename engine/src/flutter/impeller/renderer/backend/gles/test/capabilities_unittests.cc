@@ -19,6 +19,7 @@ TEST(CapabilitiesGLES, CanInitializeWithDefaults) {
   EXPECT_FALSE(capabilities->SupportsSSBO());
   EXPECT_TRUE(capabilities->SupportsTextureToTextureBlits());
   EXPECT_FALSE(capabilities->SupportsFramebufferFetch());
+  EXPECT_TRUE(capabilities->SupportsFramebufferRenderMipmap());
   EXPECT_FALSE(capabilities->SupportsCompute());
   EXPECT_FALSE(capabilities->SupportsComputeSubgroups());
   EXPECT_FALSE(capabilities->SupportsReadFromResolve());
@@ -60,6 +61,61 @@ TEST(CapabilitiesGLES, SupportsFramebufferFetch) {
   auto mock_gles = MockGLES::Init(extensions);
   auto capabilities = mock_gles->GetProcTable().GetCapabilities();
   EXPECT_TRUE(capabilities->SupportsFramebufferFetch());
+}
+
+TEST(CapabilitiesGLES, SupportsFramebufferRenderMipmapOnDesktopGL) {
+  auto mock_gles = MockGLES::Init(std::nullopt, "OpenGL 4.0");
+  auto capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_TRUE(capabilities->SupportsFramebufferRenderMipmap());
+}
+
+TEST(CapabilitiesGLES, SupportsFramebufferRenderMipmapOnES3) {
+  auto mock_gles = MockGLES::Init(std::nullopt, "OpenGL ES 3.0");
+  auto capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_TRUE(capabilities->SupportsFramebufferRenderMipmap());
+}
+
+TEST(CapabilitiesGLES, DoesNotSupportFramebufferRenderMipmapOnES2WithoutExts) {
+  auto const extensions = std::vector<const char*>{
+      "GL_KHR_debug",
+  };
+  auto mock_gles = MockGLES::Init(extensions, "OpenGL ES 2.0");
+  auto capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_FALSE(capabilities->SupportsFramebufferRenderMipmap());
+}
+
+TEST(CapabilitiesGLES, DoesNotSupportFramebufferRenderMipmapOnES2WithOneExt) {
+  auto const texture_storage_extensions = std::vector<const char*>{
+      "GL_KHR_debug",
+      "GL_EXT_texture_storage",
+  };
+  auto mock_gles =
+      MockGLES::Init(texture_storage_extensions, "OpenGL ES 2.0");
+  auto capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_FALSE(capabilities->SupportsFramebufferRenderMipmap());
+
+  capabilities.reset();
+  mock_gles.reset();
+
+  auto const fbo_render_mipmap_extensions = std::vector<const char*>{
+      "GL_KHR_debug",
+      "GL_OES_fbo_render_mipmap",
+  };
+  mock_gles =
+      MockGLES::Init(fbo_render_mipmap_extensions, "OpenGL ES 2.0");
+  capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_FALSE(capabilities->SupportsFramebufferRenderMipmap());
+}
+
+TEST(CapabilitiesGLES, SupportsFramebufferRenderMipmapOnES2WithBothExts) {
+  auto const extensions = std::vector<const char*>{
+      "GL_KHR_debug",
+      "GL_EXT_texture_storage",
+      "GL_OES_fbo_render_mipmap",
+  };
+  auto mock_gles = MockGLES::Init(extensions, "OpenGL ES 2.0");
+  auto capabilities = mock_gles->GetProcTable().GetCapabilities();
+  EXPECT_TRUE(capabilities->SupportsFramebufferRenderMipmap());
 }
 
 TEST(CapabilitiesGLES, SupportsMSAA) {

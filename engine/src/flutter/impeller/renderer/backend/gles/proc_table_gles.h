@@ -287,6 +287,7 @@ void(glDepthRange)(GLdouble n, GLdouble f);
   PROC(EndQueryEXT);                        \
   PROC(GetQueryObjectuivEXT);               \
   PROC(BlitFramebufferANGLE);               \
+  PROC(TexStorage2DEXT);                    \
   PROC(VertexAttribDivisor);                \
   PROC(VertexAttribDivisorEXT);             \
   PROC(DrawArraysInstanced);                \

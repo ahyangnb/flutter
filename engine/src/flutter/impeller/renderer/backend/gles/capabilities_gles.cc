@@ -29,6 +29,13 @@ static const constexpr char* kMultisampledRenderToTexture2Ext =
 // https://registry.khronos.org/OpenGL/extensions/OES/OES_element_index_uint.txt
 static const constexpr char* kElementIndexUintExt = "GL_OES_element_index_uint";
 
+// https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_storage.txt
+static const constexpr char* kTextureStorageExt = "GL_EXT_texture_storage";
+
+// https://registry.khronos.org/OpenGL/extensions/OES/OES_fbo_render_mipmap.txt
+static const constexpr char* kFramebufferRenderMipmapExt =
+    "GL_OES_fbo_render_mipmap";
+
 // The BC family spans three separate OpenGL ES extensions: S3TC (BC1-BC3),
 // RGTC (BC5), and BPTC (BC7). All three are required to report kBC support.
 // https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_compression_s3tc.txt
@@ -200,6 +207,16 @@ CapabilitiesGLES::CapabilitiesGLES(const ProcTableGLES& gl) {
   supports_texture_max_level_ = !desc->IsES() ||
                                 desc->GetGlVersion().major_version >= 3 ||
                                 desc->HasExtension(kAppleTextureMaxLevelExt);
+
+  const bool is_es = desc->IsES();
+  const bool is_gl_or_es3 = !is_es || desc->GetGlVersion().major_version >= 3;
+  const bool supports_texture_storage =
+      (is_gl_or_es3 || desc->HasExtension(kTextureStorageExt)) &&
+      gl.TexStorage2DEXT.IsAvailable();
+  const bool supports_nonzero_mip_attachment =
+      is_gl_or_es3 || desc->HasExtension(kFramebufferRenderMipmapExt);
+  supports_framebuffer_render_mipmap_ =
+      supports_texture_storage && supports_nonzero_mip_attachment;
 }
 
 bool CapabilitiesGLES::IsES() const {
@@ -207,13 +224,7 @@ bool CapabilitiesGLES::IsES() const {
 }
 
 bool CapabilitiesGLES::SupportsFramebufferRenderMipmap() const {
-  // Rendering into a non-zero mip level is not yet supported on the GLES
-  // backend. The texture storage path allocates levels with mutable, lazily
-  // allocated glTexImage2D storage, which yields an incomplete framebuffer
-  // when a non-base mip level is attached. Until that is reworked, do not
-  // advertise the capability so callers fall back instead of failing to
-  // create the framebuffer. Rendering into a cube map face is unaffected.
-  return false;
+  return supports_framebuffer_render_mipmap_;
 }
 
 bool CapabilitiesGLES::SupportsTextureMaxLevel() const {

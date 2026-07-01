@@ -204,7 +204,13 @@ bool BlitCopyBufferToTextureCommandGLES::Encode(
     return false;
   }
   const auto& gl = reactor.GetProcTable();
-  gl.BindTexture(texture_type, gl_handle.value());
+  if (texture_gles.UsesImmutableStorage()) {
+    if (!texture_gles.EnsureImmutableStorage()) {
+      return false;
+    }
+  } else {
+    gl.BindTexture(texture_type, gl_handle.value());
+  }
   const GLvoid* tex_data =
       source.GetBuffer()->OnGetContents() + source.GetRange().offset;
 
