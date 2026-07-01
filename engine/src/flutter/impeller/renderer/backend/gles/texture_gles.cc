@@ -62,8 +62,13 @@ static bool IsDepthStencilFormat(PixelFormat format) {
   FML_UNREACHABLE();
 }
 
-static std::optional<GLenum> ToImmutableTextureStorageFormat(
-    PixelFormat format) {
+enum class SizedFormatUse {
+  kImmutableTextureStorage,
+  kRenderBuffer,
+};
+
+static std::optional<GLenum> ToSizedRenderableFormat(PixelFormat format,
+                                                     SizedFormatUse use) {
   switch (format) {
     case PixelFormat::kB8G8R8A8UNormInt:
     case PixelFormat::kR8G8B8A8UNormInt:
@@ -72,16 +77,22 @@ static std::optional<GLenum> ToImmutableTextureStorageFormat(
       return GL_RGBA32F;
     case PixelFormat::kR16G16B16A16Float:
       return GL_RGBA16F;
+    case PixelFormat::kS8UInt:
+      return use == SizedFormatUse::kRenderBuffer
+                 ? std::optional<GLenum>(GL_STENCIL_INDEX8)
+                 : std::nullopt;
     case PixelFormat::kD24UnormS8Uint:
       return GL_DEPTH24_STENCIL8;
+    case PixelFormat::kD32FloatS8UInt:
+      return use == SizedFormatUse::kRenderBuffer
+                 ? std::optional<GLenum>(GL_DEPTH32F_STENCIL8)
+                 : std::nullopt;
     case PixelFormat::kUnknown:
     case PixelFormat::kA8UNormInt:
-    case PixelFormat::kS8UInt:
     case PixelFormat::kR8UNormInt:
     case PixelFormat::kR8G8UNormInt:
     case PixelFormat::kR8G8B8A8UNormIntSRGB:
     case PixelFormat::kB8G8R8A8UNormIntSRGB:
-    case PixelFormat::kD32FloatS8UInt:
     case PixelFormat::kB10G10R10XRSRGB:
     case PixelFormat::kB10G10R10XR:
     case PixelFormat::kB10G10R10A10XR:
@@ -106,6 +117,66 @@ static std::optional<GLenum> ToImmutableTextureStorageFormat(
       return std::nullopt;
   }
   FML_UNREACHABLE();
+}
+
+static std::optional<GLenum> ToImmutableTextureStorageFormat(
+    PixelFormat format) {
+  return ToSizedRenderableFormat(format,
+                                 SizedFormatUse::kImmutableTextureStorage);
+}
+
+static std::optional<GLenum> ToRenderBufferFormat(PixelFormat format) {
+  return ToSizedRenderableFormat(format, SizedFormatUse::kRenderBuffer);
+}
+
+struct ImmutableTextureStorage {
+  GLenum target = GL_NONE;
+  GLenum internal_format = GL_NONE;
+  GLsizei levels = 0;
+  GLsizei width = 0;
+  GLsizei height = 0;
+};
+
+static std::optional<ImmutableTextureStorage> CreateImmutableTextureStorage(
+    const TextureDescriptor& desc) {
+  auto storage_format = ToImmutableTextureStorageFormat(desc.format);
+  if (!storage_format.has_value()) {
+    VALIDATION_LOG << "Invalid format for immutable texture storage.";
+    return std::nullopt;
+  }
+
+  auto texture_target = ToTextureTarget(desc.type);
+  if (!texture_target.has_value()) {
+    VALIDATION_LOG << "Could not bind texture of this type.";
+    return std::nullopt;
+  }
+
+  return ImmutableTextureStorage{
+      texture_target.value(),
+      storage_format.value(),
+      static_cast<GLsizei>(desc.mip_count),
+      static_cast<GLsizei>(desc.size.width),
+      static_cast<GLsizei>(desc.size.height),
+  };
+}
+
+static bool AllocateImmutableTextureStorage(
+    const ProcTableGLES& gl,
+    GLuint handle,
+    const ImmutableTextureStorage& storage) {
+  if (!gl.TexStorage2DEXT.IsAvailable()) {
+    VALIDATION_LOG << "glTexStorage2D is not available.";
+    return false;
+  }
+
+  gl.BindTexture(storage.target, handle);
+  gl.TexStorage2DEXT(storage.target,           // target
+                     storage.levels,           // levels
+                     storage.internal_format,  // internal format
+                     storage.width,            // width
+                     storage.height            // height
+  );
+  return true;
 }
 
 static TextureGLES::Type GetTextureTypeFromDescriptor(
@@ -324,26 +395,21 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
   }
 
   const bool use_immutable_storage = UsesImmutableStorage();
-  const bool allocate_immutable_storage =
-      use_immutable_storage && !IsSliceMipLevelInitialized(0, 0);
-  auto immutable_storage_format =
-      allocate_immutable_storage
-          ? ToImmutableTextureStorageFormat(tex_descriptor.format)
-          : std::optional<GLenum>();
-  if (allocate_immutable_storage && !immutable_storage_format.has_value()) {
-    VALIDATION_LOG << "Invalid format for immutable texture storage.";
-    return false;
+  std::optional<ImmutableTextureStorage> immutable_storage;
+  if (use_immutable_storage && !IsSliceMipLevelInitialized(0, 0)) {
+    immutable_storage = CreateImmutableTextureStorage(tex_descriptor);
+    if (!immutable_storage.has_value()) {
+      return false;
+    }
   }
 
   ReactorGLES::Operation texture_upload =
       [handle = handle_.Get(),                                   //
        mapping,                                                  //
        format = gles_format.value(),                             //
-       use_immutable_storage,                                     //
-       allocate_immutable_storage,                                //
-       immutable_storage_format,                                  //
+       use_immutable_storage,                                    //
+       immutable_storage,                                        //
        size = tex_descriptor.size,                               //
-       mip_count = tex_descriptor.mip_count,                      //
        image_size = tex_descriptor.GetByteSizeOfBaseMipLevel(),  //
        texture_type,                                             //
        texture_target                                            //
@@ -355,7 +421,9 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
           return;
         }
         const auto& gl = reactor.GetProcTable();
-        gl.BindTexture(texture_type, gl_handle.value());
+        if (!immutable_storage.has_value()) {
+          gl.BindTexture(texture_type, gl_handle.value());
+        }
         const GLvoid* tex_data = nullptr;
         if (mapping) {
           tex_data = mapping->GetMapping();
@@ -366,18 +434,10 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
                        std::to_string(mapping->GetSize()).c_str());
           gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
           if (use_immutable_storage) {
-            if (allocate_immutable_storage) {
-              if (!gl.TexStorage2DEXT.IsAvailable()) {
-                VALIDATION_LOG << "glTexStorage2D is not available.";
-                return;
-              }
-              gl.TexStorage2DEXT(
-                  texture_type,                           // target
-                  static_cast<GLsizei>(mip_count),        // levels
-                  immutable_storage_format.value(),       // internal format
-                  static_cast<GLsizei>(size.width),       // width
-                  static_cast<GLsizei>(size.height)       // height
-              );
+            if (immutable_storage.has_value() &&
+                !AllocateImmutableTextureStorage(gl, gl_handle.value(),
+                                                 immutable_storage.value())) {
+              return;
             }
             gl.TexSubImage2D(texture_target,          // target
                              0u,                      // LOD level
@@ -425,53 +485,6 @@ bool TextureGLES::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
 // |Texture|
 ISize TextureGLES::GetSize() const {
   return GetTextureDescriptor().size;
-}
-
-static std::optional<GLenum> ToRenderBufferFormat(PixelFormat format) {
-  switch (format) {
-    case PixelFormat::kB8G8R8A8UNormInt:
-    case PixelFormat::kR8G8B8A8UNormInt:
-      return GL_RGBA8;
-    case PixelFormat::kR32G32B32A32Float:
-      return GL_RGBA32F;
-    case PixelFormat::kR16G16B16A16Float:
-      return GL_RGBA16F;
-    case PixelFormat::kS8UInt:
-      return GL_STENCIL_INDEX8;
-    case PixelFormat::kD24UnormS8Uint:
-      return GL_DEPTH24_STENCIL8;
-    case PixelFormat::kD32FloatS8UInt:
-      return GL_DEPTH32F_STENCIL8;
-    case PixelFormat::kUnknown:
-    case PixelFormat::kA8UNormInt:
-    case PixelFormat::kR8UNormInt:
-    case PixelFormat::kR8G8UNormInt:
-    case PixelFormat::kR8G8B8A8UNormIntSRGB:
-    case PixelFormat::kB8G8R8A8UNormIntSRGB:
-    case PixelFormat::kB10G10R10XRSRGB:
-    case PixelFormat::kB10G10R10XR:
-    case PixelFormat::kB10G10R10A10XR:
-    case PixelFormat::kR32Float:
-    case PixelFormat::kBC1RGBAUNormInt:
-    case PixelFormat::kBC1RGBAUNormIntSRGB:
-    case PixelFormat::kBC3RGBAUNormInt:
-    case PixelFormat::kBC3RGBAUNormIntSRGB:
-    case PixelFormat::kBC5RGUNormInt:
-    case PixelFormat::kBC7RGBAUNormInt:
-    case PixelFormat::kBC7RGBAUNormIntSRGB:
-    case PixelFormat::kETC2RGB8UNormInt:
-    case PixelFormat::kETC2RGB8UNormIntSRGB:
-    case PixelFormat::kETC2RGBA8UNormInt:
-    case PixelFormat::kETC2RGBA8UNormIntSRGB:
-    case PixelFormat::kASTC4x4LDR:
-    case PixelFormat::kASTC4x4LDRSRGB:
-    case PixelFormat::kASTC8x8LDR:
-    case PixelFormat::kASTC8x8LDRSRGB:
-    case PixelFormat::kASTC4x4HDR:
-    case PixelFormat::kASTC8x8HDR:
-      return std::nullopt;
-  }
-  FML_UNREACHABLE();
 }
 
 TextureGLES::Type TextureGLES::ComputeTypeForBinding(GLenum target) const {
@@ -753,16 +766,9 @@ bool TextureGLES::EnsureImmutableStorage() {
     return true;
   }
 
-  const auto& desc = GetTextureDescriptor();
-  auto storage_format = ToImmutableTextureStorageFormat(desc.format);
-  if (!storage_format.has_value()) {
-    VALIDATION_LOG << "Invalid format for immutable texture storage.";
-    return false;
-  }
-
-  auto texture_target = ToTextureTarget(desc.type);
-  if (!texture_target.has_value()) {
-    VALIDATION_LOG << "Could not bind texture of this type.";
+  auto immutable_storage =
+      CreateImmutableTextureStorage(GetTextureDescriptor());
+  if (!immutable_storage.has_value()) {
     return false;
   }
 
@@ -772,19 +778,11 @@ bool TextureGLES::EnsureImmutableStorage() {
   }
 
   const auto& gl = reactor_->GetProcTable();
-  if (!gl.TexStorage2DEXT.IsAvailable()) {
-    VALIDATION_LOG << "glTexStorage2D is not available.";
+  if (!AllocateImmutableTextureStorage(gl, handle.value(),
+                                       immutable_storage.value())) {
     return false;
   }
 
-  const auto size = GetSize();
-  gl.BindTexture(texture_target.value(), handle.value());
-  gl.TexStorage2DEXT(texture_target.value(),                 // target
-                     static_cast<GLsizei>(desc.mip_count),   // levels
-                     storage_format.value(),                 // internal format
-                     static_cast<GLsizei>(size.width),       // width
-                     static_cast<GLsizei>(size.height)       // height
-  );
   MarkContentsInitialized();
   return true;
 }

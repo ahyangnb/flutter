@@ -197,18 +197,18 @@ bool BlitCopyBufferToTextureCommandGLES::Encode(
     return false;
   }
 
-  auto gl_handle = texture_gles.GetGLHandle();
-  if (!gl_handle.has_value()) {
-    VALIDATION_LOG
-        << "Texture was collected before it could be uploaded to the GPU.";
-    return false;
-  }
   const auto& gl = reactor.GetProcTable();
   if (texture_gles.UsesImmutableStorage()) {
     if (!texture_gles.EnsureImmutableStorage()) {
       return false;
     }
   } else {
+    auto gl_handle = texture_gles.GetGLHandle();
+    if (!gl_handle.has_value()) {
+      VALIDATION_LOG
+          << "Texture was collected before it could be uploaded to the GPU.";
+      return false;
+    }
     gl.BindTexture(texture_type, gl_handle.value());
   }
   const GLvoid* tex_data =

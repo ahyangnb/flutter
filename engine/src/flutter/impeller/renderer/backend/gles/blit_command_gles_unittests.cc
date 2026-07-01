@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <initializer_list>
 #include <tuple>
 
@@ -348,10 +349,10 @@ TEST(BlitCommandGLESTest,
   auto worker = std::make_shared<MockWorker>();
   reactor->AddWorker(worker);
 
-  auto dest = CreateMipTexture(
-      reactor, PixelFormat::kR8G8B8A8UNormInt, ISize{8, 8},
-      /*mip_count=*/3, TextureType::kTexture2D,
-      TextureUsage::kRenderTarget | TextureUsage::kShaderRead);
+  auto dest =
+      CreateMipTexture(reactor, PixelFormat::kR8G8B8A8UNormInt, ISize{8, 8},
+                       /*mip_count=*/3, TextureType::kTexture2D,
+                       TextureUsage::kRenderTarget | TextureUsage::kShaderRead);
   auto source = CreateMipBuffer(reactor, 4 * 4 * 4);
 
   BlitCopyBufferToTextureCommandGLES command;
@@ -370,6 +371,70 @@ TEST(BlitCommandGLESTest,
       .Times(0);
   EXPECT_CALL(mock_gles_impl_ref,
               TexSubImage2D(GL_TEXTURE_2D, 1, _, _, 4, 4, _, _, _))
+      .Times(1);
+
+  EXPECT_TRUE(command.Encode(*reactor));
+}
+
+TEST(BlitCommandGLESTest, SetContentsToMippedRenderTargetUsesImmutableStorage) {
+  auto mock_gles_impl = std::make_unique<MockGLESImpl>();
+  auto& mock_gles_impl_ref = *mock_gles_impl;
+  std::shared_ptr<MockGLES> mock_gl = MockGLES::Init(std::move(mock_gles_impl));
+  auto reactor = std::make_shared<TestReactorGLES>();
+  auto worker = std::make_shared<MockWorker>();
+  reactor->AddWorker(worker);
+
+  auto texture =
+      CreateMipTexture(reactor, PixelFormat::kR8G8B8A8UNormInt, ISize{8, 8},
+                       /*mip_count=*/3, TextureType::kTexture2D,
+                       TextureUsage::kRenderTarget | TextureUsage::kShaderRead);
+  std::array<uint8_t, 8 * 8 * 4> contents = {};
+
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexStorage2D(GL_TEXTURE_2D, 3, GL_RGBA8, 8, 8))
+      .Times(1);
+  EXPECT_CALL(mock_gles_impl_ref, TexImage2D(_, _, _, _, _, _, _, _, _))
+      .Times(0);
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexSubImage2D(GL_TEXTURE_2D, 0, _, _, 8, 8, _, _, _))
+      .Times(1);
+
+  EXPECT_TRUE(texture->SetContents(contents.data(), contents.size()));
+  EXPECT_TRUE(texture->IsSliceMipLevelInitialized(0, 2));
+}
+
+TEST(BlitCommandGLESTest,
+     BlitCopyBufferToMippedCubemapRenderTargetUsesImmutableStorage) {
+  auto mock_gles_impl = std::make_unique<MockGLESImpl>();
+  auto& mock_gles_impl_ref = *mock_gles_impl;
+  std::shared_ptr<MockGLES> mock_gl = MockGLES::Init(std::move(mock_gles_impl));
+  auto reactor = std::make_shared<TestReactorGLES>();
+  auto worker = std::make_shared<MockWorker>();
+  reactor->AddWorker(worker);
+
+  auto dest =
+      CreateMipTexture(reactor, PixelFormat::kR8G8B8A8UNormInt, ISize{4, 4},
+                       /*mip_count=*/2, TextureType::kTextureCube,
+                       TextureUsage::kRenderTarget | TextureUsage::kShaderRead);
+  auto source = CreateMipBuffer(reactor, 2 * 2 * 4);
+
+  BlitCopyBufferToTextureCommandGLES command;
+  command.source = DeviceBuffer::AsBufferView(source);
+  command.destination = dest;
+  command.destination_region = IRect::MakeXYWH(0, 0, 2, 2);
+  command.mip_level = 1;
+  command.slice = 2;  // GL_TEXTURE_CUBE_MAP_POSITIVE_Z
+  command.label = "TestBlit";
+
+  const GLenum face_target = GL_TEXTURE_CUBE_MAP_POSITIVE_X + 2;
+
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexStorage2D(GL_TEXTURE_CUBE_MAP, 2, GL_RGBA8, 4, 4))
+      .Times(1);
+  EXPECT_CALL(mock_gles_impl_ref, TexImage2D(_, _, _, _, _, _, _, _, _))
+      .Times(0);
+  EXPECT_CALL(mock_gles_impl_ref,
+              TexSubImage2D(face_target, 1, _, _, 2, 2, _, _, _))
       .Times(1);
 
   EXPECT_TRUE(command.Encode(*reactor));
